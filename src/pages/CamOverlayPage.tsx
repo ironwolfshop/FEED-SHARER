@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
+import { isCamSlotId } from '../lib/camWebRtc'
 import { createPeerCamViewer } from '../lib/peerCam'
 import { initCamsSync, useCamsStore } from '../store/camsStore'
 
@@ -8,7 +9,6 @@ export default function CamOverlayPage() {
   const { side = 'blue' } = useParams()
   const [params] = useSearchParams()
   const slotId = isCamSlotId(side) ? side : 'blue'
-  const cloud = useCloudCams()
   const storeCode = useCamsStore((s) => s.accessCode)
   const accessCode = (params.get('code') || storeCode || 'CME24').toUpperCase()
   const matchName = useCamsStore((s) => s.matchName)
@@ -25,16 +25,14 @@ export default function CamOverlayPage() {
   )
 
   useEffect(() => {
-    if (!cloud) ensureObsSync()
     initCamsSync()
     document.documentElement.style.background = 'transparent'
     document.body.style.background = 'transparent'
-  }, [cloud])
+  }, [])
 
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
-    // Always PeerJS on this deploy (public domain)
     const viewer = createPeerCamViewer({
       slotId,
       accessCode,
