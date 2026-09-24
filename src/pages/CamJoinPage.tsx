@@ -5,10 +5,7 @@ import {
   openCamera,
   type CamSlotId,
 } from '../lib/camWebRtc'
-import {
-  createPeerCamPublisher,
-  useCloudCams,
-} from '../lib/peerCam'
+import { createPeerCamPublisher, useCloudCams } from '../lib/peerCam'
 import { ensureObsSync } from '../lib/obsSync'
 import {
   codesMatch,
@@ -16,9 +13,7 @@ import {
   useCamsStore,
 } from '../store/camsStore'
 
-/**
- * Phone/laptop join page — access code → pick slot → publish feed.
- */
+/** One phone per blue / red / caster. */
 export default function CamJoinPage() {
   const store = useCamsStore()
   const cloud = useCloudCams()
@@ -31,7 +26,10 @@ export default function CamJoinPage() {
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
-  const publisherRef = useRef<{ stop: () => void } | null>(null)
+  const localPubRef = useRef<ReturnType<typeof createCamPublisher> | null>(null)
+  const peerPubRef = useRef<ReturnType<typeof createPeerCamPublisher> | null>(
+    null,
+  )
 
   useEffect(() => {
     if (!cloud) ensureObsSync()
@@ -42,7 +40,8 @@ export default function CamJoinPage() {
 
   useEffect(() => {
     return () => {
-      publisherRef.current?.stop()
+      localPubRef.current?.stop()
+      peerPubRef.current?.stop()
       streamRef.current?.getTracks().forEach((t) => t.stop())
       if (slot) useCamsStore.getState().setSlotLive(slot, false)
     }
@@ -55,8 +54,6 @@ export default function CamJoinPage() {
       setError('Enter the access code')
       return
     }
-    // On the public domain there is no shared hub — room = whatever code they type.
-    // On LAN, still match the operator desk code.
     if (!cloud && !codesMatch(entered, store.accessCode)) {
       setError('Wrong access code')
       return
@@ -66,12 +63,40 @@ export default function CamJoinPage() {
     setUnlocked(true)
   }
 
+  function pickSlot(next: CamSlotId) {
+    const taken =
+      (next === 'blue' && store.blueLive) ||
+      (next === 'red' && store.redLive) ||
+      (next === 'caster' && store.casterLive)
+    if (taken) {
+      setError(
+        next === 'caster'
+          ? 'Shoutcaster is already live — only one phone.'
+          : `${next === 'blue' ? 'Blue' : 'Red'} is already live — only one phone per color.`,
+      )
+      return
+    }
+    setError(null)
+    setSlot(next)
+  }
+
   async function publish() {
     if (!slot || !isCamSlotId(slot)) return
+    const alreadyLive =
+      (slot === 'blue' && store.blueLive) ||
+      (slot === 'red' && store.redLive) ||
+      (slot === 'caster' && store.casterLive)
+    if (alreadyLive) {
+      setError(
+        'This color is already live — only one phone per blue/red. Stop the other phone first.',
+      )
+      return
+    }
     setBusy(true)
     setError(null)
     try {
-      publisherRef.current?.stop()
+      localPubRef.current?.stop()
+      peerPubRef.current?.stop()
       streamRef.current?.getTracks().forEach((t) => t.stop())
 
       const stream = await openCamera()
@@ -88,37 +113,57 @@ export default function CamJoinPage() {
             ? store.redName
             : store.casterName
 
-      if (cloud) {
-        await new Promise<void>((resolve) => {
-          let done = false
-          const timer = window.setTimeout(() => {
-            if (!done) {
-              done = true
-              resolve()
-            }
-          }, 6000)
-          publisherRef.current = createPeerCamPublisher({
-            slotId: slot,
-            accessCode: store.accessCode,
-            stream,
-            onReady: () => {
-              if (done) return
-              done = true
-              window.clearTimeout(timer)
-              resolve()
-            },
-          })
-        })
-      } else {
-        publisherRef.current = createCamPublisher({
+      if (!cloud) {
+        localPubRef.current = createCamPublisher({
           slotId: slot,
           stream,
           label,
         })
       }
+
+      await new Promise<void>((resolve, reject) => {
+        let settled = false
+        const timer = window.setTimeout(() => {
+          if (!settled) {
+            settled = true
+            resolve()
+          }
+        }, 6000)
+        peerPubRef.current = createPeerCamPublisher({
+          slotId: slot,
+          accessCode: store.accessCode,
+          stream,
+          onReady: () => {
+            if (settled) return
+            settled = true
+            window.clearTimeout(timer)
+            resolve()
+          },
+          onError: (message) => {
+            if (message === 'slot-taken') {
+              if (settled) return
+              settled = true
+              window.clearTimeout(timer)
+              reject(
+                new Error(
+                  'This color is already live — only one phone per blue/red. Stop the other phone first.',
+                ),
+              )
+            }
+          },
+        })
+      })
+
       setLive(true)
       store.setSlotLive(slot, true)
     } catch (err) {
+      localPubRef.current?.stop()
+      localPubRef.current = null
+      peerPubRef.current?.stop()
+      peerPubRef.current = null
+      streamRef.current?.getTracks().forEach((t) => t.stop())
+      streamRef.current = null
+      if (videoRef.current) videoRef.current.srcObject = null
       setError(
         err instanceof Error
           ? err.message
@@ -132,8 +177,10 @@ export default function CamJoinPage() {
   }
 
   function stop() {
-    publisherRef.current?.stop()
-    publisherRef.current = null
+    localPubRef.current?.stop()
+    localPubRef.current = null
+    peerPubRef.current?.stop()
+    peerPubRef.current = null
     streamRef.current?.getTracks().forEach((t) => t.stop())
     streamRef.current = null
     if (videoRef.current) videoRef.current.srcObject = null
@@ -190,31 +237,50 @@ export default function CamJoinPage() {
           </form>
         ) : !slot ? (
           <div className="space-y-3 rounded-2xl border border-white/10 bg-white/5 p-5">
-            <p className="text-center text-sm text-slate-300">Which camera?</p>
+            <p className="text-center text-sm text-slate-300">
+              Which camera?{' '}
+              <span className="text-slate-500">(one phone per color)</span>
+            </p>
             <button
               type="button"
-              onClick={() => setSlot('caster')}
-              className="w-full rounded-xl bg-amber-600 py-4 text-lg font-bold hover:bg-amber-500"
+              disabled={store.casterLive}
+              onClick={() => pickSlot('caster')}
+              className="w-full rounded-xl bg-amber-600 py-4 text-lg font-bold hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {store.casterName}
               <span className="mt-1 block text-xs font-semibold uppercase tracking-wider text-amber-100/80">
-                Shoutcaster window
+                {store.casterLive ? 'Already live' : 'Shoutcaster window'}
               </span>
             </button>
             <button
               type="button"
-              onClick={() => setSlot('blue')}
-              className="w-full rounded-xl bg-sky-600 py-4 text-lg font-bold hover:bg-sky-500"
+              disabled={store.blueLive}
+              onClick={() => pickSlot('blue')}
+              className="w-full rounded-xl bg-sky-600 py-4 text-lg font-bold hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {store.blueName}
+              {store.blueLive ? (
+                <span className="mt-1 block text-xs font-semibold uppercase tracking-wider text-sky-100/80">
+                  Already live
+                </span>
+              ) : null}
             </button>
             <button
               type="button"
-              onClick={() => setSlot('red')}
-              className="w-full rounded-xl bg-rose-600 py-4 text-lg font-bold hover:bg-rose-500"
+              disabled={store.redLive}
+              onClick={() => pickSlot('red')}
+              className="w-full rounded-xl bg-rose-600 py-4 text-lg font-bold hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {store.redName}
+              {store.redLive ? (
+                <span className="mt-1 block text-xs font-semibold uppercase tracking-wider text-rose-100/80">
+                  Already live
+                </span>
+              ) : null}
             </button>
+            {error && (
+              <p className="text-center text-sm text-rose-300">{error}</p>
+            )}
           </div>
         ) : (
           <div className="space-y-4">
@@ -250,7 +316,7 @@ export default function CamJoinPage() {
                 onClick={() => void publish()}
                 className="w-full rounded-2xl bg-emerald-600 py-4 text-xl font-extrabold hover:bg-emerald-500 disabled:opacity-60"
               >
-                {busy ? 'Starting…' : 'Publish feed'}
+                {busy ? 'Connecting…' : 'Publish feed'}
               </button>
             ) : (
               <button

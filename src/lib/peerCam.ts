@@ -89,6 +89,15 @@ export function createPeerCamPublisher(opts: {
       conn.on('open', hello)
       conn.on('data', (raw) => {
         const data = raw as { type?: string; viewerId?: string }
+        // Another phone trying to steal this color — we stay; they get slot-taken
+        if (data?.type === 'kick') {
+          try {
+            conn.send({ type: 'busy' })
+          } catch {
+            /* ignore */
+          }
+          return
+        }
         if (data?.type === 'hello' && data.viewerId) callViewer(data.viewerId)
       })
     })
@@ -106,9 +115,21 @@ export function createPeerCamPublisher(opts: {
 
     peer.on('error', (err) => {
       const type = String((err as { type?: string })?.type || err)
+      // One phone per color — do not steal an occupied PeerJS id
+      if (type === 'unavailable-id') {
+        opts.onError?.('slot-taken')
+        alive = false
+        try {
+          peer?.destroy()
+        } catch {
+          /* ignore */
+        }
+        peer = null
+        return
+      }
       opts.onError?.(type)
       if (!alive) return
-      if (type === 'unavailable-id' || type === 'network' || type === 'server-error') {
+      if (type === 'network' || type === 'server-error') {
         retry += 1
         const delay = Math.min(8000, 800 * retry)
         window.setTimeout(() => {
