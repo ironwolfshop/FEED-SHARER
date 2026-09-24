@@ -1287,7 +1287,8 @@
 }
 
 
-/* ——— Team desk (blue / red) — phone cam in the hole ——— */
+
+/* --- Team desk (blue / red) - phone cam in the hole --- */
 .td-hole {
   position: absolute;
   left: 260px;
@@ -1308,7 +1309,6 @@
     0 22px
   );
 }
-
 .td-hole video {
   position: absolute;
   inset: 0;
@@ -1318,11 +1318,7 @@
   opacity: 0;
   transition: opacity 0.35s ease;
 }
-
-.td-hole video.is-live {
-  opacity: 1;
-}
-
+.td-hole video.is-live { opacity: 1; }
 .td-hole-wait {
   position: absolute;
   inset: 0;
@@ -1336,7 +1332,6 @@
   font-family: Rajdhani, 'Exo 2', sans-serif;
   text-align: center;
 }
-
 .td-hole-kicker {
   font-size: 14px;
   letter-spacing: 0.35em;
@@ -1344,29 +1339,22 @@
   color: #7dd3fc;
   font-weight: 700;
 }
-
-.td-hole.side-red .td-hole-kicker {
-  color: #fda4af;
-}
-
+.td-hole.side-red .td-hole-kicker { color: #fda4af; }
 .td-hole-wait strong {
   font-size: 42px;
   font-weight: 800;
   letter-spacing: 0.04em;
 }
-
 .td-hole-wait > span:last-child {
   font-size: 16px;
   letter-spacing: 0.2em;
   text-transform: uppercase;
   color: rgba(255, 255, 255, 0.45);
 }
-
 .td-stage.side-blue .sc-live.is-on .sc-live-dot {
   background: #38bdf8;
   box-shadow: 0 0 12px #38bdf8;
 }
-
 .td-stage.side-red .sc-live.is-on .sc-live-dot {
   background: #fb7185;
   box-shadow: 0 0 12px #fb7185;
