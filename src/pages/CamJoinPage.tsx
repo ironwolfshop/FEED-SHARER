@@ -5,6 +5,10 @@ import {
   openCamera,
   type CamSlotId,
 } from '../lib/camWebRtc'
+import {
+  createPeerCamPublisher,
+  useCloudCams,
+} from '../lib/peerCam'
 import { ensureObsSync } from '../lib/obsSync'
 import {
   codesMatch,
@@ -17,6 +21,7 @@ import {
  */
 export default function CamJoinPage() {
   const store = useCamsStore()
+  const cloud = useCloudCams()
   const [code, setCode] = useState('')
   const [unlocked, setUnlocked] = useState(false)
   const [slot, setSlot] = useState<CamSlotId | null>(null)
@@ -26,14 +31,14 @@ export default function CamJoinPage() {
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
-  const publisherRef = useRef<ReturnType<typeof createCamPublisher> | null>(null)
+  const publisherRef = useRef<{ stop: () => void } | null>(null)
 
   useEffect(() => {
-    ensureObsSync()
+    if (!cloud) ensureObsSync()
     initCamsSync()
     document.documentElement.style.background = '#071018'
     document.body.style.background = '#071018'
-  }, [])
+  }, [cloud])
 
   useEffect(() => {
     return () => {
@@ -45,10 +50,18 @@ export default function CamJoinPage() {
 
   function unlock(e: React.FormEvent) {
     e.preventDefault()
-    if (!codesMatch(code, store.accessCode)) {
+    const entered = code.trim().toUpperCase()
+    if (!entered) {
+      setError('Enter the access code')
+      return
+    }
+    // On the public domain there is no shared hub — room = whatever code they type.
+    // On LAN, still match the operator desk code.
+    if (!cloud && !codesMatch(entered, store.accessCode)) {
       setError('Wrong access code')
       return
     }
+    store.setAccessCode(entered)
     setError(null)
     setUnlocked(true)
   }
@@ -74,11 +87,20 @@ export default function CamJoinPage() {
           : slot === 'red'
             ? store.redName
             : store.casterName
-      publisherRef.current = createCamPublisher({
-        slotId: slot,
-        stream,
-        label,
-      })
+
+      if (cloud) {
+        publisherRef.current = createPeerCamPublisher({
+          slotId: slot,
+          accessCode: store.accessCode,
+          stream,
+        })
+      } else {
+        publisherRef.current = createCamPublisher({
+          slotId: slot,
+          stream,
+          label,
+        })
+      }
       setLive(true)
       store.setSlotLive(slot, true)
     } catch (err) {
@@ -120,7 +142,7 @@ export default function CamJoinPage() {
           <div className="text-[11px] font-bold tracking-[0.35em] text-teal-300">
             FEED SHARER
           </div>
-          <h1 className="mt-1 font-display text-2xl font-bold">Cam publisher</h1>
+          <h1 className="mt-1 font-display text-2xl font-bold">Join with code</h1>
           <p className="mt-1 text-sm text-slate-400">{store.matchName}</p>
         </div>
 

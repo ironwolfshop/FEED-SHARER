@@ -1,13 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
 import { createCamViewer, isCamSlotId } from '../lib/camWebRtc'
+import { createPeerCamViewer, useCloudCams } from '../lib/peerCam'
 import { ensureObsSync } from '../lib/obsSync'
 import { initCamsSync, useCamsStore } from '../store/camsStore'
 
-/** OBS — single feed `/overlay/cam/blue|red|caster` */
+/** OBS / browser — single feed `/overlay/cam/blue|red|caster` */
 export default function CamOverlayPage() {
   const { side = 'blue' } = useParams()
+  const [params] = useSearchParams()
   const slotId = isCamSlotId(side) ? side : 'blue'
+  const cloud = useCloudCams()
+  const storeCode = useCamsStore((s) => s.accessCode)
+  const accessCode = (params.get('code') || storeCode || 'CME24').toUpperCase()
   const matchName = useCamsStore((s) => s.matchName)
   const label = useCamsStore((s) =>
     slotId === 'blue'
@@ -22,18 +27,25 @@ export default function CamOverlayPage() {
   )
 
   useEffect(() => {
-    ensureObsSync()
+    if (!cloud) ensureObsSync()
     initCamsSync()
     document.documentElement.style.background = 'transparent'
     document.body.style.background = 'transparent'
-  }, [])
+  }, [cloud])
 
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
-    const viewer = createCamViewer({ slotId, video, onStatus: setStatus })
+    const viewer = cloud
+      ? createPeerCamViewer({
+          slotId,
+          accessCode,
+          video,
+          onStatus: setStatus,
+        })
+      : createCamViewer({ slotId, video, onStatus: setStatus })
     return () => viewer.stop()
-  }, [slotId])
+  }, [slotId, accessCode, cloud])
 
   return (
     <div className="overlay-root overflow-hidden bg-transparent">
