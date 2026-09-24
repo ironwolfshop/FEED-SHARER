@@ -1,42 +1,54 @@
 import Peer, { type DataConnection, type MediaConnection } from 'peerjs'
 import type { CamSlotId } from './camWebRtc'
 
+const ICE: RTCConfiguration = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    {
+      urls: 'turn:openrelay.metered.ca:80',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+  ],
+}
+
 export function camRoomId(accessCode: string, slotId: string) {
   const code =
     accessCode.trim().toUpperCase().replace(/[^A-Z0-9]/g, '') || 'CME24'
   return `cme-feed-${code}-${slotId}`
 }
 
-function peerOpts(id?: string) {
-  const config = {
-    iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' },
-    ],
+function createPeer(id?: string) {
+  const opts = {
+    debug: 1 as const,
+    host: '0.peerjs.com',
+    port: 443,
+    path: '/',
+    secure: true,
+    config: ICE,
   }
-  return id
-    ? { debug: 1 as const, config }
-    : { debug: 1 as const, config }
+  return id ? new Peer(id, opts) : new Peer(opts)
 }
 
-function makePeer(id?: string) {
-  return id ? new Peer(id, peerOpts(id)) : new Peer(peerOpts())
-}
-
-/**
- * Publish camera via PeerJS cloud.
- * Viewers open a data channel; publisher then calls them with the video stream.
- */
+/** Publish camera via PeerJS cloud. Resolves when broker accepts the peer id. */
 export function createPeerCamPublisher(opts: {
   slotId: CamSlotId | string
   accessCode: string
   stream: MediaStream
+  onReady?: () => void
+  onError?: (message: string) => void
 }) {
   const id = camRoomId(opts.accessCode, opts.slotId)
   let peer: Peer | null = null
   let alive = true
   const calls = new Set<MediaConnection>()
-  const conns = new Set<DataConnection>()
+  let retry = 0
 
   function callViewer(viewerId: string) {
     if (!peer || !alive || !viewerId) return
@@ -51,32 +63,37 @@ export function createPeerCamPublisher(opts: {
     }
   }
 
-  function bindPeer(p: Peer) {
-    p.on('open', () => {
-      /* waiting for viewers */
+  function start() {
+    try {
+      peer?.destroy()
+    } catch {
+      /* ignore */
+    }
+    if (!alive) return
+
+    peer = createPeer(id)
+
+    peer.on('open', () => {
+      retry = 0
+      opts.onReady?.()
     })
 
-    p.on('connection', (conn) => {
-      conns.add(conn)
-      conn.on('data', (raw) => {
-        const data = raw as { type?: string; viewerId?: string }
-        if (data?.type === 'hello' && data.viewerId) {
-          callViewer(data.viewerId)
-        }
-      })
-      conn.on('open', () => {
-        // Some clients send hello before we bind; ask again
+    peer.on('connection', (conn: DataConnection) => {
+      const hello = () => {
         try {
           conn.send({ type: 'ready' })
         } catch {
           /* ignore */
         }
+      }
+      conn.on('open', hello)
+      conn.on('data', (raw) => {
+        const data = raw as { type?: string; viewerId?: string }
+        if (data?.type === 'hello' && data.viewerId) callViewer(data.viewerId)
       })
-      conn.on('close', () => conns.delete(conn))
     })
 
-    // Also answer if a viewer dials us (legacy / fallback)
-    p.on('call', (call) => {
+    peer.on('call', (call) => {
       if (!alive) {
         call.close()
         return
@@ -87,29 +104,18 @@ export function createPeerCamPublisher(opts: {
       call.on('error', () => calls.delete(call))
     })
 
-    p.on('error', (err) => {
-      const type = String((err as { type?: string })?.type || '')
-      if ((type === 'unavailable-id' || type === 'peer-unavailable') && alive) {
-        try {
-          p.destroy()
-        } catch {
-          /* ignore */
-        }
+    peer.on('error', (err) => {
+      const type = String((err as { type?: string })?.type || err)
+      opts.onError?.(type)
+      if (!alive) return
+      if (type === 'unavailable-id' || type === 'network' || type === 'server-error') {
+        retry += 1
+        const delay = Math.min(8000, 800 * retry)
         window.setTimeout(() => {
           if (alive) start()
-        }, 1000)
+        }, delay)
       }
     })
-  }
-
-  function start() {
-    try {
-      peer?.destroy()
-    } catch {
-      /* ignore */
-    }
-    peer = makePeer(id)
-    bindPeer(peer)
   }
 
   start()
@@ -126,14 +132,6 @@ export function createPeerCamPublisher(opts: {
         }
       }
       calls.clear()
-      for (const c of conns) {
-        try {
-          c.close()
-        } catch {
-          /* ignore */
-        }
-      }
-      conns.clear()
       try {
         peer?.destroy()
       } catch {
@@ -158,17 +156,18 @@ export function createPeerCamViewer(opts: {
   let alive = true
   let retryTimer: number | null = null
   let live = false
+  let dialTimer: number | null = null
+
+  function attachRemoteStream(stream: MediaStream) {
+    if (opts.video.srcObject !== stream) opts.video.srcObject = stream
+    void opts.video.play().catch(() => undefined)
+    live = true
+    opts.onStatus?.('live')
+  }
 
   function attachCall(next: MediaConnection) {
     call = next
-    next.on('stream', (stream) => {
-      if (opts.video.srcObject !== stream) {
-        opts.video.srcObject = stream
-      }
-      void opts.video.play().catch(() => undefined)
-      live = true
-      opts.onStatus?.('live')
-    })
+    next.on('stream', attachRemoteStream)
     next.on('close', () => {
       live = false
       opts.onStatus?.('idle')
@@ -195,24 +194,23 @@ export function createPeerCamViewer(opts: {
     } catch {
       /* ignore */
     }
+    if (dialTimer != null) window.clearTimeout(dialTimer)
     try {
       peer?.destroy()
     } catch {
       /* ignore */
     }
 
-    peer = makePeer()
+    peer = createPeer()
 
     peer.on('open', (myId) => {
       if (!alive || !peer) return
 
-      // Receive when publisher calls us
       peer.on('call', (incoming) => {
         incoming.answer()
         attachCall(incoming)
       })
 
-      // Tell publisher to call us
       conn = peer.connect(target, { reliable: true })
       conn.on('open', () => {
         try {
@@ -232,43 +230,44 @@ export function createPeerCamViewer(opts: {
         }
       })
       conn.on('error', () => {
-        if (!live) {
-          opts.onStatus?.('idle')
-          scheduleRetry()
-        }
-      })
-      conn.on('close', () => {
         if (!live) scheduleRetry()
       })
 
-      // Fallback: we dial publisher with a silent canvas stream
-      window.setTimeout(() => {
+      // Fallback dial: viewer calls publisher
+      dialTimer = window.setTimeout(() => {
         if (!alive || live || !peer) return
         try {
           const canvas = document.createElement('canvas')
           canvas.width = 2
           canvas.height = 2
-          const dummy = canvas.captureStream(1)
+          const ctx = canvas.getContext('2d')
+          if (ctx) {
+            ctx.fillStyle = '#000'
+            ctx.fillRect(0, 0, 2, 2)
+          }
+          const dummy = canvas.captureStream(5)
           const outbound = peer.call(target, dummy)
           if (outbound) attachCall(outbound)
         } catch {
           /* ignore */
         }
-      }, 1200)
+      }, 900)
     })
 
     peer.on('error', () => {
-      if (!live) opts.onStatus?.('error')
-      scheduleRetry()
+      if (!live) {
+        opts.onStatus?.('error')
+        scheduleRetry()
+      }
     })
   }
 
   function scheduleRetry() {
-    if (!alive || retryTimer != null) return
+    if (!alive || retryTimer != null || live) return
     retryTimer = window.setTimeout(() => {
       retryTimer = null
       if (!live) connect()
-    }, 2500)
+    }, 2000)
   }
 
   connect()
@@ -278,6 +277,7 @@ export function createPeerCamViewer(opts: {
     stop() {
       alive = false
       if (retryTimer != null) window.clearTimeout(retryTimer)
+      if (dialTimer != null) window.clearTimeout(dialTimer)
       try {
         call?.close()
       } catch {
