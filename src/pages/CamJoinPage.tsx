@@ -89,10 +89,25 @@ export default function CamJoinPage() {
             : store.casterName
 
       if (cloud) {
-        publisherRef.current = createPeerCamPublisher({
-          slotId: slot,
-          accessCode: store.accessCode,
-          stream,
+        await new Promise<void>((resolve) => {
+          let done = false
+          const timer = window.setTimeout(() => {
+            if (!done) {
+              done = true
+              resolve()
+            }
+          }, 6000)
+          publisherRef.current = createPeerCamPublisher({
+            slotId: slot,
+            accessCode: store.accessCode,
+            stream,
+            onReady: () => {
+              if (done) return
+              done = true
+              window.clearTimeout(timer)
+              resolve()
+            },
+          })
         })
       } else {
         publisherRef.current = createCamPublisher({
