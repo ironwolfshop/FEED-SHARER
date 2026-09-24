@@ -14,8 +14,6 @@ export default function App() {
       <Route path="/desk" element={<CamsControlPage />} />
       <Route path="/control/cams" element={<Navigate to="/desk" replace />} />
       <Route path="/overlay/cam/:side" element={<CamOverlayPage />} />
-      <Route path="/overlay/team/blue" element={<TeamDeskOverlayPage />} />
-      <Route path="/overlay/team/red" element={<TeamDeskOverlayPage />} />
       <Route path="/overlay/team/:side" element={<TeamDeskOverlayPage />} />
       <Route path="*" element={<Navigate to="/control" replace />} />
     </Routes>
