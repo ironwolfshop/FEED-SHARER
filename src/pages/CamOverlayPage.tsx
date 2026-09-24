@@ -1,11 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
-import { createCamViewer, isCamSlotId } from '../lib/camWebRtc'
-import { createPeerCamViewer, useCloudCams } from '../lib/peerCam'
-import { ensureObsSync } from '../lib/obsSync'
+import { createPeerCamViewer } from '../lib/peerCam'
 import { initCamsSync, useCamsStore } from '../store/camsStore'
 
-/** OBS / browser — single feed `/overlay/cam/blue|red|caster` */
+/** OBS / browser — `/overlay/cam/blue|red|caster?code=CME24` */
 export default function CamOverlayPage() {
   const { side = 'blue' } = useParams()
   const [params] = useSearchParams()
@@ -36,16 +34,15 @@ export default function CamOverlayPage() {
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
-    const viewer = cloud
-      ? createPeerCamViewer({
-          slotId,
-          accessCode,
-          video,
-          onStatus: setStatus,
-        })
-      : createCamViewer({ slotId, video, onStatus: setStatus })
+    // Always PeerJS on this deploy (public domain)
+    const viewer = createPeerCamViewer({
+      slotId,
+      accessCode,
+      video,
+      onStatus: setStatus,
+    })
     return () => viewer.stop()
-  }, [slotId, accessCode, cloud])
+  }, [slotId, accessCode])
 
   return (
     <div className="overlay-root overflow-hidden bg-transparent">
@@ -64,8 +61,11 @@ export default function CamOverlayPage() {
           <div className="mt-2 text-3xl font-bold">{label}</div>
           <div className="mt-3 text-xs uppercase tracking-widest text-slate-400">
             {status === 'connecting' && 'Waiting for phone…'}
-            {status === 'idle' && 'Offline'}
+            {status === 'idle' && 'Offline — is the phone still publishing?'}
             {status === 'error' && 'Reconnecting…'}
+          </div>
+          <div className="mt-2 text-[10px] tracking-wider text-slate-500">
+            code {accessCode} · {slotId}
           </div>
         </div>
       )}
